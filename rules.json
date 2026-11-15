@@ -1,0 +1,4 @@
+{
+    "auction-section-list": "./output/auction_sections.json",
+    "/api/v1/users": "./output/users.json"
+}
