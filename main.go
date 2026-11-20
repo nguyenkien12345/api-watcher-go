@@ -91,7 +91,7 @@ import (
 
 type Config struct {
 	Addr          string 		// Cờ CLI: -addr 			=> Giá trị mặc định: 127.0.0.1:8888 	=> Ý nghĩa: Địa chỉ proxy lắng nghe. Bạn cấu hình trình duyệt dùng proxy tại địa chỉ này
-	RulesPath     string 		// Cờ CLI: --rules 			=> Giá trị mặc định: rules.json 		=> Ý nghĩa: File khai báo những API cần theo dõi
+	RulesPath     string 		// Cờ CLI: -rules 			=> Giá trị mặc định: rules.json 		=> Ý nghĩa: File khai báo những API cần theo dõi
 	InlineRules   string 		// Cờ CLI: -watch 			=> Giá trị mặc định: "" 				=> Ý nghĩa: Khai báo rule thẳng trên dòng lệnh, không cần file
 	OutputDir     string 		// Cờ CLI: -out-dir 		=> Giá trị mặc định: ./output 			=> Ý nghĩa: Thư mục lưu file JSON nếu rule không chỉ định đường dẫn
 	CAFile        string 		// Cờ CLI: -ca-file 		=> Giá trị mặc định: ca.crt 			=> Ý nghĩa: Chứng chỉ để proxy giải mã được HTTPS. Phải import vào máy thì mới đọc được nội dung các trang https
