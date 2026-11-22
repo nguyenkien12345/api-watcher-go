@@ -1,0 +1,50 @@
+++++++++++ Những điểm Go đáng chú ý ++++++++++
+++++++++++++++++++++ Go không có từ khoá export hay public/private. Quy tắc chỉ là ++++++++++++++++++++
+① Chữ viết hoa đầu tên <=> public → package khác truy cập được (exported)
+VD: Addr viết hoa chữ đầu
+
+② Chữ viết thường đầu tên <=> private → chỉ dùng trong package hiện tại
+VD: addr viết thường
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Kết luận: Điều này quan trọng vì thư viện encoding/json chỉ đọc/ghi được field viết hoa
+
+③ Zero value: không có giá trị undefined hay null
+- Tạo struct mà không gán giá trị thì mỗi field tự nhận "giá trị rỗng" theo kiểu của nó
+VD: var c Config
+c.Addr          == ""
+c.IgnoreKeys    == nil   (slice rỗng, nhưng len() vẫn = 0, range vẫn chạy bình thường)
+c.MaxBodyBytes  == 0
+c.StripCacheHeaders == false
+=> Trong TS chúng ta hay phải viết config.addr ?? "default". Trong Go, c.Addr không bao giờ là undefined, nhưng chúng ta cũng không phân biệt được "user truyền chuỗi rỗng" với "user không truyền gì". Đó là lý do code dùng strings.TrimSpace(x) != "" ở khắp nơi
+
+④ []string là slice, không hẳn là array giống như JS. Slice giống string[] của JS: độ dài thay đổi được, append được
+
+⑤ time.Duration: thời gian có kiểu riêng
+- Bên dưới nó chỉ là một int64 đếm nanosecond, nhưng có kiểu riêng nên không bị nhầm đơn vị
+
+⑥ flag.Duration cho phép user gõ dạng chữ trên CLI
+VD: ./watcher -toast-cooldown=1m30s, ./watcher -toast-cooldown=500ms
+
+⑦ Struct được COPY khi gán (khác hoàn toàn so với object JS)
+VD với JS
+===== JS: object được truyền theo reference =====
+	const a = { addr: "x" };
+	const b = a;
+	b.addr = "y";
+	console.log(a.addr); "y" ← a bị đổi theo
+
+VD với Go
+ ===== Go: struct được copy =====
+a := Config{Addr: "x"}
+b := a
+b.Addr = "y"
+fmt.Println(a.Addr) "x" ← a không bị ảnh hưởng
+
+Nhưng có bẫy: copy struct thì slice bên trong vẫn dùng chung mảng phía dưới (giống shallow copy)
+
+- Config chứa toàn bộ cấu hình khởi chạy của chương trình (nhận động từ CLI flags)
+a := Config{IgnoreKeys: []string{"id", "ts"}}
+b := a
+b.IgnoreKeys[0] = "HACKED"
+fmt.Println(a.IgnoreKeys[0]) "HACKED" 😱
