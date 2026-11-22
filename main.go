@@ -152,14 +152,15 @@ type RuleConfigJSON struct {
 }
 
 // Watcher quản lý vòng đời quy tắc, đồng bộ hóa file I/O và chống spam thông báo.
+// Lưu ý tất cả field bên trong Watcher đều viết thường, tức là private trong package. Code bên ngoài không được đụng trực tiếp vào, chỉ đi qua method
 type Watcher struct {
-	cfg         Config
-	rulesMu     sync.RWMutex
-	rules       []Rule
-	rulesMod    time.Time
-	fileLocks   sync.Map // map[string]*sync.Mutex (khóa theo từng đường dẫn file)
-	toastMu     sync.Mutex
-	lastToasted map[string]time.Time
+	cfg         Config					// Bản copy của Config (cấu hình từ dòng lệnh)
+	rulesMu     sync.RWMutex            // Khoá (lock) để bảo vệ dữ liệu bên trên
+	rules       []Rule					// Danh sách rule đang dùng
+	rulesMod    time.Time				// Thời điểm rules.json bị sửa lần cuối, dùng để biết khi nào cần nạp lại file (hot-reload)
+	fileLocks   sync.Map                // map[string]*sync.Mutex (khóa theo từng đường dẫn file)
+	toastMu     sync.Mutex              // Khoá (lock) để bảo vệ dữ liệu bên trên
+	lastToasted map[string]time.Time 	// Ghi nhớ "API nào đã hiện thông báo lúc mấy giờ", phục vụ cooldown chống spam
 }
 
 func NewWatcher(cfg Config) (*Watcher, error) {
@@ -380,6 +381,7 @@ func (w *Watcher) notifyAsync(key, title, message string) {
 // Các hàm xử lý HTTP, Giải nén & Chuẩn hóa JSON (Pure / Reusable Functions)
 // ============================================================================
 
+// Hàm này nhận vào HTTP method của request ("GET", "POST"...) và trả lời câu hỏi "request này có đáng để theo dõi không?". Bốn method OPTIONS, HEAD, CONNECT, TRACE trả false, mọi method còn lại trả true
 func isTrackableMethod(method string) bool {
 	switch strings.ToUpper(method) {
 	case http.MethodOptions, http.MethodHead, http.MethodConnect, http.MethodTrace:
