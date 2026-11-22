@@ -108,15 +108,43 @@ type Config struct {
 //   -toast-cooldown 10s
 // => Lệnh này theo dõi 2 API, bỏ qua 2 key động và giãn thông báo ra 10 giây. Tất cả giá trị này được gom vào một struct Config, rồi truyền đi khắp chương trình. Cách này giống việc bạn tạo một object config trong Node rồi import vào nhiều nơi
 
-// Rule đại diện cho một quy tắc bắt API sau khi đã chuẩn hóa.
+// + Rule là dữ liệu đã chuẩn hoá mà chương trình dùng bên trong: đã điền giá trị mặc định, đã viết hoa/thường thống nhất, đã chuyển sang dạng tra cứu nhanh
+// + Tại sao lại dùng map[string]bool? Go không có kiểu Set. Cách phổ biến là dùng map, chỉ quan tâm key, value luôn là true. Mẹo này chạy được nhờ quy tắc zero value: đọc key không có trong map thì nhận giá trị rỗng của kiểu value, với bool là false. Nhờ vậy matchRules mới viết ngắn được thế này
 type Rule struct {
-	Pattern    string
-	OutputPath string
-	Methods    map[string]bool
-	IgnoreKeys map[string]bool
+	Pattern    string				 // chuỗi để so khớp URL, ví dụ "/api/orders"
+	OutputPath string				 // file lưu bản gốc
+	Methods    map[string]bool       // các HTTP method được theo dõi
+	IgnoreKeys map[string]bool       // các key JSON bỏ qua khi so sánh
 }
 
-// RuleConfigJSON hỗ trợ cấu hình nâng cao trong rules.json bên cạnh kiểu chuỗi đơn giản.
+// + RuleConfigJSON mô tả dữ liệu thô user viết trong rules.json. Nó giống một DTO, hay schema input của zod
+// + Phần nằm trong dấu backtick `json:"output"` gọi là struct tag. Nó là metadata gắn vào field, báo cho thư viện encoding/json biết: "key output trong JSON tương ứng với field Output"
+// + Tại sao cần tag? Vì quy tắc bài trước: field bắt buộc viết hoa thì json mới đọc được, trong khi JSON thường viết thường hoặc snake_case. Tag nối hai cách đặt tên đó lại: JSON:  "ignore_keys"   ──tag──►   Go: IgnoreKeys
+// + Ví dụ rules.json mà user viết:
+// {
+//   "/api/users": "./out/users.json",
+//   "/api/orders": {
+//     "output": "./out/orders.json",
+//     "methods": ["GET", "post"],
+//     "ignore_keys": ["timestamp", "RequestId"]
+//   }
+// }
+// => Rule đầu tiên viết dạng chuỗi đơn giản. Rule thứ hai viết dạng object nâng cao, và chỉ dạng object mới được parse vào RuleConfigJSON
+
+// Sau khi qua buildRule, rule /api/orders ở ví dụ trên sẽ thành:
+// Rule{
+//     Pattern:    "/api/orders",
+//     OutputPath: "out/orders.json",                            // đã filepath.Clean
+//     Methods:    map[string]bool{"GET": true, "POST": true},   // "post" → "POST"
+//     IgnoreKeys: map[string]bool{"timestamp": true, "requestid": true}, // viết thường hết
+// }
+
+// Ví dụ:
+// var adv RuleConfigJSON
+// json.Unmarshal([]byte(`{"output":"./o.json","methods":["GET"]}`), &adv)
+// adv.Output     == "./o.json"
+// adv.Methods    == ["GET"]
+// adv.IgnoreKeys == nil   ← thiếu trong JSON thì nhận zero value, không lỗi
 type RuleConfigJSON struct {
 	Output     string   `json:"output"`
 	Methods    []string `json:"methods"`
