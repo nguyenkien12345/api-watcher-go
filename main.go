@@ -302,9 +302,61 @@ func (w *Watcher) processRuleMatch(rule Rule, rawBody []byte) error {
 	return nil
 }
 
+// Hàm này nhận một đường dẫn file và trả về chiếc khoá dành riêng cho file đó. Vì Watcher có field fileLocks là kho chứa "mỗi file một khoá". 
+// Hàm này là người giữ kho có nhiệm vụ như sau:
+// - 1) File đã có khoá thì trả lại đúng chiếc khoá cũ.
+// - 2) File chưa có khoá thì tạo khoá mới, cất vào kho, rồi trả về.
+
+// - Phần (w *Watcher) đứng trước tên hàm gọi là receiver: nó gắn hàm này vào kiểu Watcher
+// - w đóng vai trò this. Go không có từ khoá this, bạn tự đặt tên. Quy ước là dùng 1–2 chữ cái đầu của tên kiểu (w cho Watcher, c cho Config)
+// - Gọi method bằng dấu chấm như JS: w.getFileLock("...")
+// - *Watcher là pointer receiver: method nhận con trỏ, không nhận bản copy. struct chứa khoá thì không được copy
+// - Nếu viết func (w Watcher) không có *, mỗi lần gọi method sẽ là một bản copy của Watcher kèm khoá bị copy, coi như không khoá gì
+// => Quy tắc nhanh: method cần sửa struct, hoặc struct chứa mutex, hoặc struct lớn, thì dùng *. Gần như mọi method bạn viết sẽ dùng *
+// => Vì sao phải có (w *Watcher)? => Vì hàm này cần dùng field fileLocks nằm bên trong Watcher
+// - Dấu * trong w *Watcher nghĩa là làm việc trên bản gốc, không phải bản copy. Trong Go, struct bị copy mỗi khi truyền đi. Vì vậy:
+//  	=> w *Watcher (có *): hàm nhận bản gốc
+// 		=> w Watcher (không *): mỗi lần gọi, hàm nhận một bản photo của Watcher
+// 		=> Giống như bạn đưa người khác bản photo của một tờ giấy để họ sửa: họ sửa xong, tờ gốc của bạn vẫn y như cũ
+// 		=> Tóm lại: Method gắn vào struct thì cứ dùng *. Đó cũng là cách gần như mọi code Go vẫn viết, và nó chạy đúng như object trong JS mà chúng ta đã quen
 func (w *Watcher) getFileLock(targetPath string) *sync.Mutex {
+	// + filepath.Clean: chuẩn hoá đường dẫn
+	// VD 1: filepath.Clean("./out/../out//users.json")  // "out/users.json"
+	// VD 2: filepath.Clean("out/users.json")            // "out/users.json"
+	// => Hai chuỗi khác nhau nhưng cùng trỏ tới một file. Không chuẩn hoá thì chúng thành 2 key khác nhau và nhận 2 khoá khác nhau, khi đó khoá mất tác dụng. Nó tương đương path.normalize() trong Node
 	cleanPath := filepath.Clean(targetPath)
+
+	// + Hàm trả về nhiều giá trị, và _ để bỏ bớt
+	// - Hàm Go có thể trả về nhiều giá trị cùng lúc. LoadOrStore trả về 2 giá trị:
+	// - actual: chiếc khoá sẽ được dùng (cũ hoặc mới)
+	// - loaded: true nếu khoá đã có sẵn từ trước, false nếu vừa được cất vào
+	// - LoadOrStore gộp "kiểm tra + cất" thành một thao tác nguyên tử (atomic), không ai chen vào giữa được. Dù 100 goroutine cùng gọi, tất cả đều nhận đúng một chiếc khoá duy nhất
+    // - &sync.Mutex{}: tạo giá trị rồi lấy địa chỉ. sync.Mutex{} tạo một mutex mới (dạng struct literal như Config{...}). & ở phía trước nghĩa là lấy địa chỉ của nó, tức là tạo ra con trỏ *sync.Mutex
+	// - Tại sao phải cất con trỏ mà không cất mutex trực tiếp? Lại là quy tắc "mutex không được copy". Nếu cất giá trị, mỗi lần Load ra bạn nhận một bản copy của mutex. Mỗi goroutine sẽ khoá bản copy của riêng mình, tức là không khoá gì cả. Cất con trỏ thì mọi người cùng trỏ tới một mutex thật duy nhất
+	
+	// - &sync.Mutex{}
+
+	// Trong đó:
+	// + sync.Mutex      // chỉ là tên kiểu, chưa có cái khoá nào cả
+	// + sync.Mutex{}    // tạo ra một cái khoá mới
+
+	// Nó tương ứng với:
+	// - Mutex           // chỉ là tên class
+	// - new Mutex()     // tạo ra một object thật
+
+	// &: lấy địa chỉ, để mọi người dùng chung bản gốc
+	// & là cặp với * mà bạn vừa hỏi:
+	// * nằm trong kiểu (*sync.Mutex) nghĩa là "đây là con trỏ tới bản gốc".
+	// & nằm trước giá trị (&sync.Mutex{}) là hành động tạo ra con trỏ đó.
+
+	// Ngoài ra, hàm đã hứa trả về *sync.Mutex (có *), nên thứ được cất vào tủ cũng phải là &... thì mới khớp kiểu
+
 	actual, _ := w.fileLocks.LoadOrStore(cleanPath, &sync.Mutex{})
+
+	// - Tương đương với return actual as Mutex trong TS
+	// - Khác biệt lớn: as của TS chỉ để lừa compiler và mất đi lúc chạy. Type assertion của Go thì được kiểm tra thật lúc chạy. Sai kiểu là panic
+	// - Ở đầu hàm, chúng ta đã hứa sẽ trả về một *sync.Mutex. Nên chúng ta phải viết return actual.(*sync.Mutex)
+	// - Nhưng sync.Map lưu được mọi loại dữ liệu, nên thứ nó trả ra cho chúng ta có kiểu là any, nghĩa là "cái gì cũng được". Go không chịu trả một thứ "cái gì cũng được" khi chúng ta đã hứa trả một kiểu cụ thể
 	return actual.(*sync.Mutex)
 }
 
