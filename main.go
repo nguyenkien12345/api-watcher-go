@@ -38,15 +38,36 @@ type Config struct {
 	StripCacheHeaders bool 		// Cờ CLI: -strip-cache 	=> Giá trị mặc định: true 				=> Ý nghĩa: Xoá header cache khỏi request để server luôn trả dữ liệu thật, không trả 304 Not Modified rỗng
 }
 
-// Ví dụ chạy:
-// go run main.go \
-//   -watch "/api/users=./out/users.json,/api/orders" \
-//   -ignore-keys "timestamp,requestId" \
-//   -toast-cooldown 10s
-// => Lệnh này theo dõi 2 API, bỏ qua 2 key động và giãn thông báo ra 10 giây. Tất cả giá trị này được gom vào một struct Config, rồi truyền đi khắp chương trình. Cách này giống việc bạn tạo một object config trong Node rồi import vào nhiều nơi
+// + Go không có kiểu Set nên dùng map[string]bool thay thế:
+// key có trong map → true, key không có → Go tự trả false (không lỗi).
 
-// + Rule là dữ liệu đã chuẩn hoá mà chương trình dùng bên trong: đã điền giá trị mặc định, đã viết hoa/thường thống nhất, đã chuyển sang dạng tra cứu nhanh
-// + Tại sao lại dùng map[string]bool? Go không có kiểu Set. Cách phổ biến là dùng map, chỉ quan tâm key, value luôn là true. Mẹo này chạy được nhờ quy tắc zero value: đọc key không có trong map thì nhận giá trị rỗng của kiểu value, với bool là false. Nhờ vậy matchRules mới viết ngắn được thế này
+// + map[string]bool là gì? Đọc tên là ra cấu trúc: map[kiểu của key]kiểu của value.
+// 	map[string]bool
+//  ^^^^^^ ^^^^
+//  key là chuỗi, value là true/false
+
+// + Nó giống object trong JS:
+// ===== Cách viết với JS =====
+// const methods = { GET: true, POST: true };
+
+// ===== Cách viết với GO =====
+// methods := map[string]bool{"GET": true, "POST": true}
+
+// ===== Dùng để làm gì? =====
+// + Ở đây map được dùng để trả lời đúng một câu hỏi: "có tên trong danh sách không?"
+
+// + methods := map[string]bool{"GET": true, "POST": true}
+//  - methods["GET"]     // true  → có tên trong danh sách
+//  - methods["DELETE"]  // false → không có tên, Go tự trả false, không lỗi
+// => Điểm hay là hỏi một tên không có trong danh sách thì Go tự trả false, chứ không trả undefined hay báo lỗi như JS. Vì vậy chỉ cần một dòng là kiểm tra xong
+
+// + ===== Áp vào Rule =====
+// Methods:    map[string]bool{"GET": true, "POST": true}
+// → chỉ theo dõi GET và POST
+
+// IgnoreKeys: map[string]bool{"timestamp": true, "requestid": true}
+// → khi so sánh JSON, gặp key "timestamp" hay "requestid" thì bỏ qua
+
 type Rule struct {
 	Pattern    string				 // chuỗi để so khớp URL, ví dụ "/api/orders"
 	OutputPath string				 // file lưu bản gốc
