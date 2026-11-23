@@ -26,18 +26,6 @@ import (
 	"github.com/gen2brain/beeep"
 )
 
-// ++++++++++ Chương trình này làm gì? ++++++++++
-
-// - Nó là một proxy chen vào giữa trình duyệt và server. Hình dung trong Chrome DevTools có tab Network, và bạn có một con bot ngồi canh tab đó:
-// Trình duyệt  ──►  Proxy (chương trình này)  ──►  Server API
-//              ◄──                            ◄──
-
-// 1) Mỗi request đi qua, proxy kiểm tra URL có khớp "rule" bạn khai báo không (ví dụ URL chứa /api/users).
-// 2) Nếu khớp, lần đầu tiên nó lưu response JSON ra file, gọi là bản gốc (origin).
-// 3) Những lần sau, nó so response mới với bản gốc. Nếu khác nhau, nó ghi ra file *_diff.json và hiện thông báo (toast) trên desktop.
-
-// => Mục đích là phát hiện khi nào API âm thầm thay đổi dữ liệu
-
 type Config struct {
 	Addr          string 		// Cờ CLI: -addr 			=> Giá trị mặc định: 127.0.0.1:8888 	=> Ý nghĩa: Địa chỉ proxy lắng nghe. Bạn cấu hình trình duyệt dùng proxy tại địa chỉ này
 	RulesPath     string 		// Cờ CLI: -rules 			=> Giá trị mặc định: rules.json 		=> Ý nghĩa: File khai báo những API cần theo dõi
@@ -101,15 +89,14 @@ type RuleConfigJSON struct {
 }
 
 // Watcher quản lý vòng đời quy tắc, đồng bộ hóa file I/O và chống spam thông báo.
-// Lưu ý tất cả field bên trong Watcher đều viết thường, tức là private trong package. Code bên ngoài không được đụng trực tiếp vào, chỉ đi qua method
 type Watcher struct {
-	cfg         Config					// Bản copy của Config (cấu hình từ dòng lệnh)
-	rulesMu     sync.RWMutex            // Khoá (lock) để bảo vệ dữ liệu bên trên
-	rules       []Rule					// Danh sách rule đang dùng
-	rulesMod    time.Time				// Thời điểm rules.json bị sửa lần cuối, dùng để biết khi nào cần nạp lại file (hot-reload)
-	fileLocks   sync.Map                // map[string]*sync.Mutex (khóa theo từng đường dẫn file)
-	toastMu     sync.Mutex              // Khoá (lock) để bảo vệ dữ liệu bên trên
-	lastToasted map[string]time.Time 	// Ghi nhớ "API nào đã hiện thông báo lúc mấy giờ", phục vụ cooldown chống spam
+	cfg         Config
+	rulesMu     sync.RWMutex
+	rules       []Rule
+	rulesMod    time.Time
+	fileLocks   sync.Map
+	toastMu     sync.Mutex
+	lastToasted map[string]time.Time
 }
 
 func NewWatcher(cfg Config) (*Watcher, error) {
