@@ -38,36 +38,6 @@ type Config struct {
 	StripCacheHeaders bool 		// Cờ CLI: -strip-cache 	=> Giá trị mặc định: true 				=> Ý nghĩa: Xoá header cache khỏi request để server luôn trả dữ liệu thật, không trả 304 Not Modified rỗng
 }
 
-// + Go không có kiểu Set nên dùng map[string]bool thay thế:
-// key có trong map → true, key không có → Go tự trả false (không lỗi).
-
-// + map[string]bool là gì? Đọc tên là ra cấu trúc: map[kiểu của key]kiểu của value.
-// 	map[string]bool
-//  ^^^^^^ ^^^^
-//  key là chuỗi, value là true/false
-
-// + Nó giống object trong JS:
-// ===== Cách viết với JS =====
-// const methods = { GET: true, POST: true };
-
-// ===== Cách viết với GO =====
-// methods := map[string]bool{"GET": true, "POST": true}
-
-// ===== Dùng để làm gì? =====
-// + Ở đây map được dùng để trả lời đúng một câu hỏi: "có tên trong danh sách không?"
-
-// + methods := map[string]bool{"GET": true, "POST": true}
-//  - methods["GET"]     // true  → có tên trong danh sách
-//  - methods["DELETE"]  // false → không có tên, Go tự trả false, không lỗi
-// => Điểm hay là hỏi một tên không có trong danh sách thì Go tự trả false, chứ không trả undefined hay báo lỗi như JS. Vì vậy chỉ cần một dòng là kiểm tra xong
-
-// + ===== Áp vào Rule =====
-// Methods:    map[string]bool{"GET": true, "POST": true}
-// → chỉ theo dõi GET và POST
-
-// IgnoreKeys: map[string]bool{"timestamp": true, "requestid": true}
-// → khi so sánh JSON, gặp key "timestamp" hay "requestid" thì bỏ qua
-
 type Rule struct {
 	Pattern    string				 // chuỗi để so khớp URL, ví dụ "/api/orders"
 	OutputPath string				 // file lưu bản gốc
@@ -75,59 +45,97 @@ type Rule struct {
 	IgnoreKeys map[string]bool       // các key JSON bỏ qua khi so sánh
 }
 
-// + RuleConfigJSON mô tả dữ liệu thô user viết trong rules.json. Nó giống một DTO, hay schema input của zod
-// + Phần nằm trong dấu backtick `json:"output"` gọi là struct tag. Nó là metadata gắn vào field, báo cho thư viện encoding/json biết: "key output trong JSON tương ứng với field Output"
-// + Tại sao cần tag? Vì quy tắc bài trước: field bắt buộc viết hoa thì json mới đọc được, trong khi JSON thường viết thường hoặc snake_case. Tag nối hai cách đặt tên đó lại: JSON:  "ignore_keys"   ──tag──►   Go: IgnoreKeys
-// + Ví dụ rules.json mà user viết:
-// {
-//   "/api/users": "./out/users.json",
-//   "/api/orders": {
-//     "output": "./out/orders.json",
-//     "methods": ["GET", "post"],
-//     "ignore_keys": ["timestamp", "RequestId"]
-//   }
-// }
-// => Rule đầu tiên viết dạng chuỗi đơn giản. Rule thứ hai viết dạng object nâng cao, và chỉ dạng object mới được parse vào RuleConfigJSON
-
-// Sau khi qua buildRule, rule /api/orders ở ví dụ trên sẽ thành:
-// Rule{
-//     Pattern:    "/api/orders",
-//     OutputPath: "out/orders.json",                            // đã filepath.Clean
-//     Methods:    map[string]bool{"GET": true, "POST": true},   // "post" → "POST"
-//     IgnoreKeys: map[string]bool{"timestamp": true, "requestid": true}, // viết thường hết
-// }
-
-// Ví dụ:
-// var adv RuleConfigJSON
-// json.Unmarshal([]byte(`{"output":"./o.json","methods":["GET"]}`), &adv)
-// adv.Output     == "./o.json"
-// adv.Methods    == ["GET"]
-// adv.IgnoreKeys == nil   ← thiếu trong JSON thì nhận zero value, không lỗi
 type RuleConfigJSON struct {
 	Output     string   `json:"output"`
 	Methods    []string `json:"methods"`
 	IgnoreKeys []string `json:"ignore_keys"`
 }
 
-// Watcher quản lý vòng đời quy tắc, đồng bộ hóa file I/O và chống spam thông báo.
+// + Watcher quản lý vòng đời quy tắc, đồng bộ hóa file I/O và chống spam thông báo.
+// + Quy ước đặt khoá trong Go:
+// 		- Để ý thứ tự các field: mỗi khoá đặt ngay phía trên những field mà nó bảo vệ
+// + Hai điều cần biết về khoá trong struct:
+// 		- Zero value dùng được ngay: sync.Mutex, sync.RWMutex, sync.Map không cần khởi tạo, vừa khai báo xong là gọi Lock() được
+// 		- Struct chứa khoá thì không được copy: Copy một Watcher thì khoá cũng bị copy theo. Hai bản sẽ khoá hai thứ khác nhau, coi như không khoá gì cả. Vì thế Watcher luôn được truyền đi bằng con trỏ (*Watcher). Lệnh go vet sẽ cảnh báo nếu bạn lỡ copy
+
+// + Cách phân biệt sync.RWMutex và sync.Mutex
+// - Cả hai đều là khoá: dùng để bắt các goroutine xếp hàng khi đụng vào cùng một dữ liệu. Khác nhau ở chỗ ai được vào cùng lúc
+
+// ===== sync.Mutex =====
+// - Cách khoá: Lock() / Unlock()
+// - Số người vào cùng lúc: Đúng 1 người, bất kể đọc hay ghi
+// ====================
+
+// ===== sync.RWMutex =====
+// - Cách khoá: 
+// 		- Khoá ghi: Lock() / Unlock()
+// 		- Khoá đọc: RLock() / RUnlock()
+// - Số người vào cùng lúc: Nhiều người đọc cùng lúc, hoặc đúng 1 người ghi
+// ====================
+
+// ===== Ví dụ dễ hình dung về sync.Mutex và sync.RWMutex: bảng thông báo ở sảnh ===== 
+// - Mutex: bảng thông báo nằm trong phòng chỉ vừa 1 người. Đọc hay dán đều phải xếp hàng vào từng người một. Có 100 người chỉ muốn đọc cũng phải đứng chờ nhau.
+
+// - RWMutex: bảng thông báo nằm ở sảnh rộng. 100 người đứng đọc cùng lúc thoải mái. Nhưng khi có người cần dán thông báo mới, họ hô "tạm dừng": mọi người đọc xong thì lùi ra, người đó dán một mình, dán xong thì mọi người lại đọc tiếp.
+// ==========
+
+// ===== Luật của RWMutex =====
+// mu.RLock()    // xin quyền đọc
+// mu.RUnlock()  // trả quyền đọc
+
+// mu.Lock()     // xin quyền ghi
+// mu.Unlock()   // trả quyền ghi
+
+// - Nhiều RLock() cùng lúc: được
+// - Lock() đang giữ: mọi RLock() và Lock() khác phải chờ
+// - RLock() đang giữ: Lock() phải chờ tất cả người đọc xong
+// => Ghi vào dữ liệu thì không ai khác được đọc (sẽ đọc phải dữ liệu đang sửa dở), nhưng đọc với đọc thì không ảnh hưởng nhau
+// =========================
+
 type Watcher struct {
 	cfg         Config
+
+	// - rulesMu là khoá bảo vệ 2 field rules và rulesModTime
 	rulesMu     sync.RWMutex
 	rules       []Rule
-	rulesMod    time.Time
+	rulesModTime    time.Time
+
 	fileLocks   sync.Map
+
+	// - toastMu là khoá bảo vệ field lastToasted
 	toastMu     sync.Mutex
+
+	// - Mỗi lần muốn khởi tạo giá trị của thằng lastToasted thì bắt buộc phải dùng make
+	// - make là bước tạo ra cái map thật để ghi vào được. make(...) là cách phổ biến hơn khi map bắt đầu rỗng
+	// + Vì sao Watcher bắt buộc phải có?
+	// - notifyAsync ghi vào map này mỗi khi bắn thông báo: w.lastToasted[key] = time.Now() // ghi vào map
 	lastToasted map[string]time.Time
 }
 
+// - Go không có constructor, chỉ có quy ước đặt tên NewXxx
+// - Go không có class hay new Class(). Thay vào đó, người ta viết một hàm bình thường tên NewTên để tạo và trả về giá trị
+// - Hàm này trả về 2 giá trị (*Watcher, error) thay cho try/catch
+// - Go không có exception. Hàm nào có thể thất bại thì trả thêm một giá trị error ở cuối
+// 			- Thành công: error là nil (tương đương "không có lỗi")
+// 			- Thất bại: error có nội dung, và giá trị còn lại thường là nil
+
+// + w := &Watcher{...}: tạo struct và lấy con trỏ luôn
+// + Watcher{...} tạo Watcher, & lấy địa chỉ → w có kiểu *Watcher
+// + := vừa khai báo vừa gán, giống const w = ... trong typescript (nhưng w vẫn đổi được)
 func NewWatcher(cfg Config) (*Watcher, error) {
 	w := &Watcher{
+		// Các field khác như rulesMu, rules, rulesModTime, fileLocks,... không cần điền vì zero value của chúng dùng được ngay
+		// Riêng lastToasted bắt buộc phải make(...), nếu không nó là map nil và ghi vào sẽ panic
 		cfg:         cfg,
 		lastToasted: make(map[string]time.Time),
 	}
+    // Phần trước dấu ; chạy trước và tạo biến err. Phần sau dấu ; là điều kiện. Biến err chỉ tồn tại trong khối if này, ra ngoài là mất, nên không làm rối code
 	if err := w.reloadRulesIfNeeded(true); err != nil {
+		// Lỗi: trả nil cho *Watcher (không có Watcher nào dùng được) kèm lỗi
 		return nil, err
 	}
+
+	// Thành công: trả w kèm nil cho error
 	return w, nil
 }
 
@@ -146,7 +154,7 @@ func (w *Watcher) reloadRulesIfNeeded(force bool) error {
 		} else {
 			fileModTime = info.ModTime()
 			w.rulesMu.RLock()
-			unchanged := !force && !fileModTime.After(w.rulesMod)
+			unchanged := !force && !fileModTime.After(w.rulesModTime)
 			w.rulesMu.RUnlock()
 			if unchanged {
 				return nil
@@ -172,7 +180,7 @@ func (w *Watcher) reloadRulesIfNeeded(force bool) error {
 
 	w.rulesMu.Lock()
 	w.rules = merged
-	w.rulesMod = fileModTime
+	w.rulesModTime = fileModTime
 	w.rulesMu.Unlock()
 
 	if !force {
@@ -181,31 +189,65 @@ func (w *Watcher) reloadRulesIfNeeded(force bool) error {
 	return nil
 }
 
-// matchRules trả về danh sách các Rule khớp với request hiện tại.
+// matchRules nhận một request, trả về danh sách các Rule khớp với request hiện tại
+// - Thoát sớm nếu request hỏng (nil)
+// - Kiểm tra xem rules.json có đổi không, đổi thì nạp lại (hot-reload)
+// - Duyệt từng rule, giữ lại rule nào khớp URL và method
 func (w *Watcher) matchRules(req *http.Request) []Rule {
 	if req == nil || req.URL == nil {
 		return nil
 	}
-	// Kiểm tra hot-reload nhẹ nhàng trước khi match
+
+	// - Kiểm tra hot-reload nhẹ nhàng trước khi match
+	// - false = "chỉ nạp lại nếu file đã đổi"
+	// - Nếu nạp lỗi (ví dụ bạn đang sửa rules.json dở dang, JSON sai cú pháp), chương trình chỉ ghi log rồi đi tiếp với rule cũ, không return. Nhờ vậy sửa file sai không làm proxy ngừng hoạt động
+	// - log.Printf giống console.log có định dạng. %v là chỗ điền giá trị bất kỳ (ở đây là lỗi)
 	if err := w.reloadRulesIfNeeded(false); err != nil {
 		log.Printf("⚠️ Cảnh báo reload rules: %v (giữ nguyên cấu hình cũ)", err)
 	}
 
+	// - req.URL là một struct đã tách sẵn (scheme, host, path...). .String() ghép lại thành chuỗi đầy đủ, ví dụ https://shop.com/api/users?page=1
 	fullURL := req.URL.String()
 	method := strings.ToUpper(req.Method)
 
+	// - RLock() là khoá đọc (nhiều goroutine cùng đọc được, nhưng chặn người ghi). Cần khoá vì reloadRulesIfNeeded ở goroutine khác có thể đang thay cả danh sách rules đúng lúc ta duyệt
+	// - Hẹn trước: lúc hàm thoát thì nhả khoá
+	// - Chúng ta sẽ không viết RUnlock() ở cuối hàm. Vì hàm có thể thoát ở nhiều chỗ (nhiều return, hoặc panic)
+	// - Quên nhả khoá một lần là mọi request sau bị treo mãi. Đặt defer ngay sau Lock thì không thể quên. So với JS thì nó giống finally, nhưng viết ngay cạnh chỗ khoá thay vì dồn xuống cuối
+	// - Quy tắc: Lock() xong thì dòng kế tiếp là defer Unlock()
 	w.rulesMu.RLock()
+	// - defer nghĩa là: "chạy dòng này khi hàm kết thúc", bất kể kết thúc bằng cách nào
 	defer w.rulesMu.RUnlock()
 
+	// Tại sao lại phải khai báo 2 dòng w.rulesMu.RLock() và defer w.rulesMu.RUnlock() vào trong hàm matchRules này nhỉ ?
+	// => Trong hàm này, dữ liệu dùng chung là w.rules. Vậy liệu có ai đang ghi vào nó => Chính là hàm reloadRulesIfNeeded
+	// - Hàm này chạy khi rules.json bị sửa, và nó chạy trong goroutine của một request nào đó, cùng lúc với các request khác đang duyệt w.rules. Tức là:
+	// => Không khoá thì A có thể đọc phải dữ liệu đang bị thay (Go gọi là data race), kết quả sai hoặc crash khó đoán. Có RLock thì B (cần Lock) phải chờ A đọc xong mới được thay
+	// => Quy tắc nhận biết nhanh: khoá khi đụng vào field của w (Watcher) (dữ liệu chia sẻ), không cần khoá với biến cục bộ
+
+	// Request A: đang for _, r := range w.rules { ... }   ← đọc giữa chừng
+	// Request B: w.rules = merged                         ← thay mất danh sách
+
+	// matched bắt đầu là slice nil, và append làm việc tốt với nil
 	var matched []Rule
+
+	// Go chỉ có for, không có while/forEach. range trả về 2 giá trị: chỉ số và phần tử. Ở đây không cần chỉ số nên dùng _ bỏ qua. Tương đương for (const r of rules) trong JS
 	for _, r := range w.rules {
+		// Giống fullURL.includes(pattern). Lưu ý đây là khớp chuỗi con, không phải regex hay khớp đường dẫn chính xác. Pattern /api/users sẽ khớp cả /api/users/5 và /v2/api/users-old
 		if !strings.Contains(fullURL, r.Pattern) {
+			// continue: bỏ qua rule này, sang rule kế
 			continue
 		}
+
+		// Rule này có giới hạn method, mà method của request không nằm trong danh sách → bỏ qua rule
 		if len(r.Methods) > 0 && !r.Methods[method] {
 			continue
 		}
+
+		// Lưu ý phải gán lại: matched = append(matched, r), vì append có thể trả về một slice mới. Viết append(matched, r) mà không gán là kết quả bị vứt đi.
 		matched = append(matched, r)
+
+		// r là bản copy: mỗi vòng, r là bản copy của phần tử (nhớ lại: struct bị copy khi gán). Ở đây không sao vì chỉ đọc. Nhưng Rule chứa 2 map, và map thì copy chỉ sao chép tham chiếu, nên các Rule trong matched vẫn dùng chung map với w.rules. Vì code không ghi vào map nên an toàn
 	}
 	return matched
 }
@@ -491,22 +533,87 @@ func normalizePayload(raw []byte, ignoreKeys map[string]bool) ([]byte, any) {
 	return formatted, data
 }
 
+// Hàm này nhận một cục JSON đã parse (có thể lồng nhiều tầng) và trả về bản đã xoá hết các key nằm trong danh sách bỏ qua (như timestamp, requestId), ở mọi độ sâu
+// Nó dùng đệ quy: gặp object thì duyệt từng key, gặp mảng thì duyệt từng phần tử, và mỗi con lại gọi chính hàm này
 func stripIgnoredKeys(v any, ignoreKeys map[string]bool) any {
+	// Chữ type ở đây là từ khoá. Viết v.(type) ngoài switch là lỗi compile. Trong đó val là biến mới, type hỏi "v là kiểu gì?". v.(type) chính là họ hàng của actual.(*sync.Mutex)
+	// So với JS:
+	// - if (Array.isArray(v)) { ... }            // hỏi: có phải mảng không?
+	// - else if (v && typeof v === "object") { ... }   // hỏi: có phải object không?
+	// => Go gom tất cả vào một switch gọn hơn, và sau khi hỏi xong thì compiler biết chắc kiểu, không cần as
 	switch val := v.(type) {
+	
+	// v là object → val có kiểu map[string]any
 	case map[string]any:
+		// Ví dụ: 
+		// val := map[string]any{
+		//     "name":      "An",
+		//     "timestamp": 111,
+		//     "address":   map[string]any{"city": "HCM", "timestamp": 222},
+		// }
+		// => Mục tiêu: xoá mọi key timestamp, kể cả key nằm sâu bên trong address
+
+		// + Bước 0: tạo map rỗng để hứng kết quả. Lúc này: cleaned = {}
+
+		// + Bước 1: duyệt từng key (thứ tự có thể khác, nhưng kết quả như nhau)
+		// Lượt		k	            child				 ignoreKeys[ToLower(k)]			Việc xảy ra
+		// 1		"name"		    "An"				 false	                        Không bị ignore → cleaned["name"] = stripIgnoredKeys("An") → chuỗi rơi vào default, trả nguyên "An"
+		// 2		"timestamp"	    111	                 true	                        continue → bỏ qua, không chép sang cleaned
+		// 3		"address"	    {city, timestamp}	 false	                        Không bị ignore → gọi lại chính hàm với child (xem bước 2)
+
+		// Bước 2: lượt 3 đi sâu vào address (đệ quy)
+		// stripIgnoredKeys chạy lại từ đầu với val = {"city": "HCM", "timestamp": 222}:
+		// k				Việc xảy ra
+		// "city"			Giữ lại → cleaned2["city"] = "HCM"
+		// "timestamp"		continue → bỏ
+		// => Trả về {"city": "HCM"}, rồi quay lại bước 1 và gán cleaned["address"] = {"city": "HCM"}
+
+		// Kết quả cuối cùng:
+		// {
+		//   "name": "An",
+		//   "address": { "city": "HCM" }
+		// }
+
+		// - make với tham số thứ hai là dung lượng dự trù: báo trước sẽ chứa tối đa len(val) phần tử để Go cấp phát một lần, khỏi phải nới rộng nhiều lần
+		// - Nếu bỏ len(val) thì code vẫn hoạt động hoàn toàn bình thường. Việc có thêm len(val) báo trước  "mình sắp bỏ khoảng chừng bấy nhiêu phần tử vào", để Go cấp phát đủ chỗ một lần. Không báo thì map bắt đầu nhỏ, rồi cứ đầy lại phải nới rộng và chép dữ liệu sang chỗ mới, lặp lại nhiều lần
+		// Giống như dọn nhà: biết trước có 100 món đồ thì thuê luôn xe tải đủ lớn, thay vì mang từng thùng nhỏ rồi phải đổi xe nhiều lần.
 		cleaned := make(map[string]any, len(val))
+
+		// - range trên map trả key và value (khác với slice là chỉ số và phần tử)
 		for k, child := range val {
+			// Kiểm tra k có trong danh sách → true → continue (bỏ key này)
 			if ignoreKeys[strings.ToLower(k)] {
 				continue
 			}
+
+			// - Giá trị con (child) được đệ quy xử lý tiếp, nên key nằm sâu bao nhiêu tầng cũng bị bỏ
 			cleaned[k] = stripIgnoredKeys(child, ignoreKeys)
 		}
 		return cleaned
+
+	// v là mảng   → val có kiểu []any
 	case []any:
+		// Ví dụ:
+		// val := []any{
+		//     map[string]any{"id": 1, "timestamp": 111},
+		//     map[string]any{"id": 2, "timestamp": 222},
+		// }
+
+		// Lượt	i	item					Việc xảy ra
+		// 1	0	{id:1, timestamp:111}	Làm sạch → {id:1}, ghi đè vào val[0]
+		// 2	1	{id:2, timestamp:222}	Làm sạch → {id:2}, ghi đè vào val[1]
+
+		// Kết quả cuối cùng:
+		// [ {id:1}, {id:2} ]   ← vẫn là mảng cũ, chỉ có phần tử bên trong được thay
+
+		// Chỉ cần thay từng phần tử bằng bản đã làm sạch, mảng không bị đổi độ dài. Khác nhánh object (tạo map mới), nhánh này ghi đè thẳng lên slice gốc, vì slice chia sẻ mảng bên dưới
 		for i, item := range val {
 			val[i] = stripIgnoredKeys(item, ignoreKeys)
 		}
 		return val
+	
+	// Còn lại (string, số, bool, nil) → val vẫn là any
+	// Chuỗi, số, bool, nil không có key con nên trả nguyên xi. Đây cũng là điều kiện dừng của đệ quy
 	default:
 		return v
 	}
