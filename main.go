@@ -690,7 +690,33 @@ func collectDiffPaths(path string, a, b any, out *[]string, maxDiffs int) {
 	}
 }
 
+// v.([]any) trả về 2 giá trị: là s và ok
+// Trong đó:
+// Biến		Trả lời câu hỏi								Kiểu
+// s		"Lấy ra được cái gì?"						[]any
+// ok		"Mở hộp có thành công không?"				bool
+
+// Vì sao không gộp thành một?
+// - Vì chỉ nhìn s thì không biết thất bại hay không ? 
+// - Khi v không phải mảng, s là zero value (nil). Nhưng nil cũng là giá trị của một mảng rỗng hợp lệ:
+
+// Ví dụ:
+// v1 := []any{}     // Là mảng, nhưng rỗng
+// v2 := "hello"     // Không phải mảng
+
+// s1, ok1 := v1.([]any)   // s1 = rỗng, ok1 = true
+// s2, ok2 := v2.([]any)   // s2 = nil,  ok2 = false
+// => Nếu chỉ có s, hai trường hợp này trông giống nhau (đều rỗng) nhưng ý nghĩa khác hẳn. ok là thứ phân biệt chúng.
+// => Công thức chung của Go: Mẫu chung của Go: "giá trị" + "có hợp lệ không" tách thành 2 biến, 
+// thay cho việc trả undefined/null như JS.
+
+// + Hàm này sẽ tương đương như sau bên TS:
+// function lenSlice(v: unknown): number {
+//   return Array.isArray(v) ? v.length : 0;
+// }
+
 func lenSlice(v any) int {
+	// Nếu v là mảng JSON (ok == true) thì lấy độ dài, không phải thì trả 0
 	if s, ok := v.([]any); ok {
 		return len(s)
 	}
@@ -811,6 +837,17 @@ func parseInlineRules(inline string, cfg Config) []Rule {
 	return rules
 }
 
+// - Tạo sẵn một bộ lọc regex để tìm các ký tự không an toàn khi dùng làm tên file (khoảng trắng, /, ?, :, *...)
+// VD: _api_users_page_1 => api_users_page_1.json
+
+// Go có hai hàm:
+
+// Hàm								Khi regex sai
+// regexp.Compile(...)				Trả về (*Regexp, error) để bạn tự xử lý
+// regexp.MustCompile(...)			Panic ngay
+
+// - Biến này nằm ngoài mọi hàm, nên chỉ được biên dịch một lần khi chương trình khởi động, rồi mọi lần gọi buildRule dùng lại. Biên dịch regex khá tốn, đặt trong hàm là phí vì mỗi lần gọi lại biên dịch lại. Tương tự việc bạn khai báo const re = /.../ ở đầu file JS thay vì trong hàm.
+// - Regex của Go là an toàn khi dùng đồng thời nhiều goroutine, nên dùng chung một biến không cần khoá
 var unsafeFileChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 func buildRule(pattern, outputPath string, methods, ignoreKeys []string, defaultOutDir string) Rule {
